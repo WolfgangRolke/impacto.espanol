@@ -1,0 +1,367 @@
+---
+title: Statistical Analysis
+output: 
+  html_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+library(kableExtra)
+library(pander)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, error=TRUE)
+doc.type <- knitr::opts_knit$get('rmarkdown.pandoc.to')
+```
+
+This document provides the statistical analysis for the paper *El impacto del género, el nivel socioeconómico y la escuela en las destrezas de español de los estudiantes puertorriqueños*
+
+
+## Data Preparation
+
+The data is in a file called *langcomp.xlsx*, also available from the github page:
+
+- read in the data, reorder the columns
+
+```{r}
+library(rio)
+langcomp=import("https://raw.github.com/wolfgangrolke/impacto.espanol/main/langcomp.xlsx")[, c(1,3,4,5,6,7,8)]
+```
+
+- To have a unique identifier for each school, combine the number, name and region into one variable
+
+```{r}
+langcomp[,"Escuela"]=
+  paste(langcomp[,"N"],"-",langcomp[,"Region"],"-",langcomp[,"Escuela"])
+```
+
+- some schools have only partial data (no males or females etc.) Eliminate those because we are interested in schools that are "normal", that is, they should have 32 entries:
+
+```{r}
+schools=table(langcomp[, "Escuela"])
+schools[schools!=32] # not all cases present
+langcomp=langcomp[!(langcomp[,"N"]%in%c(23, 26, 30, 70, 146)), ]
+```
+
+- some schools have very few students, again those are eliminated. The cutoff point is schools with less than 20 students in Spanish.  
+
+```{r}
+x=subset(langcomp,
+Categoría%in%c("SDE","CDE")&Idioma=="Español")[,c("Escuela","Estudiantes")]
+x=tapply(x[,2],x[,1],sum)
+x=x[x<20]
+langcomp= langcomp[!(langcomp[,"Escuela"]%in%names(x)), ]
+```
+
+
+## R Routines
+
+Here are a number of R routines used in the analysis
+
+-  **chi**
+
+This routine applies the chi square test to two sets of counts. It tests whether the two sets have the same proportions.
+
+```{r}
+chi=function(x,y) {
+  n=sum(x)
+  m=sum(y)
+  pE=(x+y)/(n+m)
+  chi=sum((x-n*pE)^2/n/pE+(y-m*pE)^2/m/pE)
+  c(chi, 1-pchisq(chi, length(x)-1))
+}
+```
+
+-  **calc.mean**
+
+this function calculates the mean score when one codes Pre-Basico=1, Básico=2, Proficiente=3, Avanzado=4
+
+```{r}
+calc.mean=function(x) sum(rep(1:4,length(x)/4)*x)/sum(x)
+```
+
+As an example consider
+
+```{r}
+langcomp[1:4, c("Escuela", "Categoría", "Nivel", "Estudiantes")]
+```
+
+yields a mean score for CDE-Spanish at school #1 of
+
+```{r}
+c((1*1+20*2+26*3+22*4)/(1+20+26+22), calc.mean(c(1,20,26,22)))
+```
+
+-  **myapply**
+
+the routine takes the *langcomp* data set, breaks it up according to *categories* and *language* (Spanish=1,English=2) and applies *fun* to each part.
+
+```{r}
+myapply=function(categories, language, fun) {
+  x=subset(langcomp, 
+    Categoría%in%categories & Idioma==c("Español","Ingles")[language])[, c("Escuela", "Estudiantes")]
+  tapply(x[, 2], x[, 1], fun)
+}
+```
+
+For example, say one wants to find the number of students in each school enrolled in Spanish. For school 1 we find directly, and then using the routine
+
+```{r}
+sum(langcomp[langcomp["N"]==1, ][1:8, "Estudiantes"])
+myapply(c("SDE","CDE"), 1, sum)[1]
+```
+
+In five schools (#23, 26, 30, 70 and  146) some categories are missing, either because these are unisex schools or because no students are classified as high-SES. We decided to eliminate these schools for the analysis because they are unusual and we are looking for general patters. Also, 20 additional schools have a very small enrollment in 11^th^ grade, less than 20 students. These were also eliminated from the data set. This leaves us with 194 schools.
+
+## Global Analysis
+
+As a first look at the data we aggregate over all the schools and see whether the percentages of students classified in the four achievement levels differ by either their economic status (low-SES or high-SES) or by their gender. We find the following counts and percentages:
+
+```{r}
+out=matrix(0, 4, 2)
+dimnames(out)=list(c("SDE-CDE, Spanish",
+                     "SDE-CDE, English",
+                     "Gender, Spanish",
+                     "Gender, English"),
+          c("Chi-square","pvalue"))
+x = subset(langcomp, Categoría=="SDE"&Idioma=="Español")
+y = subset(langcomp, Categoría=="CDE"&Idioma=="Español")
+tmp=rbind(tapply(x[,"Estudiantes"],x[,"Nivel"], sum),     
+             tapply(y[,"Estudiantes"],y[,"Nivel"], sum))
+rownames(tmp)=c("SDE - Spanish", "CDE - Spanish")
+out[1, ]=chi(tapply(x[,"Estudiantes"],x[,"Nivel"], sum),     
+             tapply(y[,"Estudiantes"],y[,"Nivel"], sum))
+x = subset(langcomp, Categoría=="SDE"&Idioma=="Ingles")
+y = subset(langcomp, Categoría=="CDE"&Idioma=="Ingles")
+tmp=rbind(tmp, tapply(x[,"Estudiantes"],x[,"Nivel"], sum),     
+             tapply(y[,"Estudiantes"],y[,"Nivel"], sum))
+rownames(tmp)[3:4]=c("SDE - English", "CDE - English")
+out[2, ]=chi(tapply(x[,"Estudiantes"],x[,"Nivel"], sum),     
+             tapply(y[,"Estudiantes"],y[,"Nivel"], sum))
+x = subset(langcomp, Categoría=="Femenino"&Idioma=="Español")
+y = subset(langcomp, Categoría=="Masculino"&Idioma=="Español")
+tmp=rbind(tmp, tapply(x[,"Estudiantes"],x[,"Nivel"], sum),     
+             tapply(y[,"Estudiantes"],y[,"Nivel"], sum))
+rownames(tmp)[5:6]=c("Female - Spanish", "Male - Spanish")
+out[3, ]=chi(tapply(x[,"Estudiantes"],x[,"Nivel"], sum),     
+             tapply(y[,"Estudiantes"],y[,"Nivel"], sum))
+x = subset(langcomp, Categoría=="Femenino"&Idioma=="Ingles")
+y = subset(langcomp, Categoría=="Masculino"&Idioma=="Ingles")
+tmp=rbind(tmp, tapply(x[,"Estudiantes"],x[,"Nivel"], sum),     
+             tapply(y[,"Estudiantes"],y[,"Nivel"], sum))
+rownames(tmp)[7:8]=c("Female - English", "Male - English")
+out[4, ]=chi(tapply(x[,"Estudiantes"],x[,"Nivel"], sum),     
+             tapply(y[,"Estudiantes"],y[,"Nivel"], sum))
+tmp=tmp[,c(3,2,4,1)]
+total=apply(tmp,1,sum)
+tmp1=tmp
+perc=0*tmp
+for(i in 1:8) {
+  perc[i, ]=round(tmp[i, ]/total[i]*100, 1)
+  tmp1[i, ]=paste0(tmp1[i, ]," (", perc[i,], "%)")
+}
+data.table1=tmp1
+
+diff=matrix(0,4,4)
+for(i in 1:4) {
+   diff[i, ]=perc[2*i-1,  ]-perc[2*i,  ]
+}
+rownames(diff) = c("SDE-CDE, Spanish", "SDE-CDE, English",
+                   "Feminino-Masculino, Spanish", "Feminino-Masculino, English")
+data.table2=diff
+```
+
+```{r echo=FALSE}
+tmp1=tmp1[c(1,2,5,6), ] # for Spanish
+rownames(tmp1) = c("SDE", "CDE", "Femenino","Masculino")
+if (doc.type == "docx")  pander(tmp1)
+if (doc.type != "docx")  kable.nice(tmp1) 
+```
+
+so 10.3\% of the students with no economic deficiencies (SDE) are classified as pre-basico, compared to 17.6\% of the students with deficiencies (CDE), and so on for the other achievement levels. 
+
+Table 2 shows the differences in percentages, for example in Spanish 10.3\% of the high-SES students are pre-basico, whereas 17.6\% of the low-SES students are, for a difference of -7.3\%. The differences go from negative to positive as the achievement level increases, and this shows that on the hand students without economic deficiencies outperform students with deficiencies, and on the other hand the female students outperform the male students.
+
+```{r}
+diff=diff[c(1,3), ]
+colnames(diff) = c("Pre-Basico","Básico","Proficiente","Avanzado")
+rownames(diff) = c("SDE - CDE", "Feminin - Masculino")
+if (doc.type == "docx")  pander(diff)
+if (doc.type != "docx")  kable.nice(diff) 
+```
+
+
+Considering the sample sizes of several thousand per group, the observed percentages   are all clearly highly statistically significant. Indeed, the corresponding chi-square tests of equal proportions all have p-values of 0. We therefore conclude that in both Spanish and English, there are significant differences both with respect to the economic situation of the students and with respect to their gender. 
+
+The chi-square test as well as the statistical methods used in this are standard methods in Statistics. For more details as well as general descriptions of hypothesis testing and confidence intervals see [Bickel and Doksum] or [Casella and Berger].
+
+
+## Analysis by School
+
+Next we calculate a mean achievement score for each school as follows: we code Pre-Basico=1, Básico=2, Proficiente=3 and Avanzado=4. Then we calculate a mean score by averaging over the students, first for Spanish and English separately and then averaging over the languages as well.
+
+We calculated these same mean scores but now for each combination of SDE/CDE and Feminino/Masculino.  
+
+We also find for each school the percentage of students who are classified as SDE, that is
+
+$$\frac{\text{# of high-SES students}}{\text{# number of students}}*100%$$
+
+again first for the languages separately and then combining these as well.
+
+-  calculate a *mean achievement score*  for each school overall, for both languages and then combining SDE,CDE-Spanish and  SDE,CDE-English.
+
+
+```{r}
+tmpS= myapply(c("SDE","CDE"), 1, calc.mean)
+tmpE=myapply(c("SDE","CDE"), 2, calc.mean)
+A=matrix(0, length(tmpS), 6)
+A[,1]=(tmpS+tmpE)/2
+A[,2]=tmpS
+A[,3]=tmpE
+```
+
+
+-  the percentage of students in Spanish and English who are classified as SDE
+
+$$\frac{SDE}{SDE+CDE}*100%$$
+
+```{r}
+perc.spanish=myapply("SDE", 1, sum)/myapply(c("SDE","CDE"), 1, sum)*100
+perc.english=myapply("SDE", 2, sum)/myapply(c("SDE","CDE"), 2, sum)*100
+A[,4]=(perc.spanish+perc.english)/2 #average over the languages
+A[, 5]=perc.spanish
+A[, 6]=perc.english
+colnames(A)=c("Overall.Mean","Spanish.Mean","English.Mean","Percentage.SDE", "Percentage.SDE.Spanish","Percentage.SDE.English")
+```
+
+
+
+-  a *mean achievement score*  for each school and each combination SDE-Spanish, CDE-Spanish etc. separately. This allows us to calculate differences such as mean(SDE-Spanish)-mean(CDE-Spanish). 
+
+
+```{r}
+type=c("SDE","CDE","Femenino","Masculino")
+for(a in 1:2) {
+  for(b in type) {
+    A=cbind(A, myapply(b, a, calc.mean))
+    colnames(A)[ncol(A)]=paste0(b,".", c("Español","Ingles")[a])
+  }
+}
+A=as.data.frame(A)
+```
+
+Here is what the first six rows of the data frame look like
+
+```{r}
+head(round(A,2))
+```
+
+
+### Mean Scores
+
+Figure 1 shows the distribution of the overall mean scores and the percentage of high-SES students
+
+```{r}
+colnames(A)[1:6]=c("Overall.Mean","Spanish.Mean","English.Mean","Percentage.SDE", "Percentage.SDE.Spanish","Percentage.SDE.English")
+Mean="Spanish.Mean"
+PSDE= "Percentage.SDE.Spanish"
+ggplot(data = data.frame(x = A[, Mean]), aes(x)) + 
+     geom_histogram(color = "black", fill = "white", binwidth = 1/10) + 
+     xlab("nivel de desempeño") + ylab("# de escuelas")
+ggplot(data = data.frame(x = A[, PSDE]), aes(x)) + 
+     geom_histogram(color = "black", fill = "white", binwidth = 5) + 
+     xlab("porcentaje SDE") + ylab("# de escuelas")
+```
+
+
+Next we consider the relationship between the overall mean achievement score and the percentage of students classified as high-SES. In figure 3 we have the scatterplot, together with the least squares regression line:
+
+```{r}
+ggplot(data=A, aes(Spanish.Mean, Percentage.SDE.Spanish))+
+   geom_point()+
+   geom_smooth(method="lm", se=FALSE) +
+   ylab("porcentaje SDE") + xlab("nivel de desempeño")  
+r=round(cor(A$Spanish.Mean, A$Percentage.SDE.Spanish)*100, 1)
+cat(r,"%\n")
+```
+
+Not surprisingly they are highly correlated (r=`r r`%).
+
+How large is the difference between the high-SES and the low-SES students achievement scores? To answer this question we run a 2-sample-t test and find a 95\% confidence interval for the scores of high-SES students minus the scores of the low-SES students. We repeat the same test for gender. The result is shown in table 3.
+
+```{r}
+out=matrix(0, 4, 2)
+dimnames(out)=list(c("SDE-CDE, Spanish",
+                     "SDE-CDE, English",
+                     "Gender, Spanish",
+                     "Gender, English"),
+          c("L","U"))
+out[1, ]=round(c(t.test(A$SDE.Español,A$CDE.Español)$conf.int),3)
+out[2, ]=round(c(t.test(A$SDE.Ingles,A$CDE.Ingles)$conf.int),3)
+out[3, ]=round(c(t.test(A$Femenino.Español,A$Masculino.Español)$conf.int),3)
+out[4, ]=round(c(t.test(A$Femenino.Ingles,A$Masculino.Ingles)$conf.int),3)
+out=out[c(1,2), ]
+row.names(out) = c("SDE - CDE", "Feminino - Masculino")
+if (doc.type == "docx")  pander(out)
+if (doc.type != "docx")  kable.nice(out) 
+```
+
+
+The assumptions of the 2-sample-t method are justified because the data is bounded and the sample size is large.
+
+
+## How does a "positive school climate" affect the differences?
+
+We will consider both the overall achievement score and the percentage of high-SES students as proxies for the a positive school climate.
+
+### Overall Achievemement Score
+
+Figure 3 shows the scatterplots of the differences in socioeconomic status (left pane) and in gender (right pane) vs the overall achievement  score. We add a non-parametric regression curve to see what a likely relationship looks like. 
+
+```{r}
+dta=data.frame(x=A[, Mean],
+              y1=A$SDE.Español-A$CDE.Español,
+              y2=A$SDE.Ingles-A$CDE.Ingles,
+              y3=A$Femenino.Español-A$Masculino.Español,
+              y4=A$Femenino.Español-A$Masculino.Español)
+ggplot(data=dta,aes(x, y1))+
+    geom_point()+
+    geom_smooth(se=FALSE)+
+    xlab("nivel de desempeño")+
+    ylab("SDE-CDE")  +
+    geom_hline(yintercept = 0)
+ggplot(data=dta,aes(x,y3))+
+    geom_point()+
+    geom_smooth(se=FALSE)+
+    xlab("nivel de desempeño")+
+    ylab("Femenino-Masculino")+
+    geom_hline(yintercept = 0)
+```
+
+In all cases we have the expected diminishing of the differences in schools with a higher overall mean achievement, but we also have a surprising diminishing of the differences in schools with a very low overall achievement.
+
+###   Percentage of students classified as SDE.
+
+Figure 4 shows the same but now with the percentage of high-SES students as the predictor variable.
+
+
+```{r}
+dta=data.frame(x=A[, PSDE],
+              y1=A$SDE.Español-A$CDE.Español,
+              y2=A$SDE.Ingles-A$CDE.Ingles,
+              y3=A$Femenino.Español-A$Masculino.Español,
+              y4=A$Femenino.Español-A$Masculino.Español)
+ggplot(data=dta,aes(x, y1))+
+    geom_point()+
+    geom_smooth(se=FALSE)+
+    xlab("porcentaje SDE")+
+    ylab("SDE-CDE")+
+    geom_hline(yintercept = 0)
+ggplot(data=dta,aes(x,y3))+
+    geom_point()+
+    geom_smooth(se=FALSE)+
+    xlab("porcentaje SDE")+
+    ylab("Femenino-Masculino")+
+    geom_hline(yintercept = 0)
+```
+
+The same general pattern appears as with the achievement score.
